@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -15,7 +16,7 @@ Portability :  GHC
 module Neovim.Ghcid.Plugin
     where
 
-import           Data.Yaml
+import           Data.Yaml                    hiding (Object)
 import           GHC.Generics
 import           Neovim
 import           Neovim.BuildTool
@@ -30,11 +31,13 @@ import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Maybe
 import qualified Control.Monad.Trans.Resource as Resource
 import qualified Data.ByteString              as BS
+import qualified Data.ByteString.Char8        as BS8
 import           Data.Either                  (rights)
 import           Data.List                    (group, sort)
 import           Data.Map                     (Map)
 import qualified Data.Map                     as Map
 import           Data.Maybe                   (mapMaybe)
+import           Data.Functor
 import           System.FilePath
 
 
@@ -126,6 +129,21 @@ startOrReload s@(ProjectSettings d c) = Map.lookup d <$> gets startedSessions >>
         applyQuickfixActions items
         void $ vim_command $ "cwindow " ++ show (length items)
 
+-- | Run command from nvim side
+ghcidExec :: Object -> Neovim r (GhcidState r) [String]
+ghcidExec (ObjectString command) = do
+    currentBufferPath <- errOnInvalidResult $ vim_call_function "expand" [ObjectBinary "%:p:h"]
+    liftIO (determineProjectSettings' currentBufferPath) >>= \case
+        Nothing ->
+          [] <$ yesOrNo "Could not determine project settings. This plugin needs a project with a .cabal file to work."
+        Just s@ProjectSettings{..} ->
+          Map.lookup rootDir <$> gets startedSessions >>= \case
+            Nothing -> do
+              whenM (yesOrNo "You need to start run GhcidStart for this projet!")
+                (startOrReload s)
+              return []
+            Just (ghcid, _) ->
+              liftIO $ exec ghcid $ BS8.unpack command
 
 applyQuickfixActions :: [QuickfixListItem String] -> Neovim r (GhcidState r) ()
 applyQuickfixActions qs = do
@@ -151,7 +169,7 @@ placeSigns qs = forM_ (zip [(1::Integer)..] qs) $ \(i, q) -> case (lnumOrPattern
 
     (Left lnum, Right f) -> do
         let signType = case errorType q of
-                Q.Error -> "GhcidErr"
+                Q.Error   -> "GhcidErr"
                 Q.Warning -> "GhcidWarn"
 
         -- TODO What if the file name contains spaces?
@@ -196,7 +214,7 @@ loadToQuickfix = dropWarningsIfErrorsArePresent . mapMaybe f
 
     dropWarningsIfErrorsArePresent xs =
         case filter ((== Q.Error) . errorType) xs of
-            [] -> xs
+            []  -> xs
             xs' -> xs'
 
 

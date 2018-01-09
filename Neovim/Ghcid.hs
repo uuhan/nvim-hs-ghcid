@@ -30,10 +30,11 @@ plugin = do
                 { readOnly = ()
                 , writable = GhcidState Map.empty []
                 , functionalities =
-                    [ $(command' 'ghcidStart) ["async", "!"]
-                    , $(command' 'ghcidStop) ["async"]
-                    , $(command' 'ghcidRestart) ["async"]
-                    ]
+                  [ $(command'  'ghcidStart)   ["async", "!"]
+                  , $(command'  'ghcidStop)    ["async"]
+                  , $(command'  'ghcidRestart) ["async"]
+                  , $(function' 'ghcidExec)    Sync
+                  ]
                 }
             ]
         }
