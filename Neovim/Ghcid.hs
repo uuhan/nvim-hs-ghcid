@@ -33,7 +33,7 @@ plugin = do
                   [ $(command'  'ghcidStart)   ["async", "!"]
                   , $(command'  'ghcidStop)    ["async"]
                   , $(command'  'ghcidRestart) ["async"]
-                  , $(function' 'ghcidExec)    Sync
+                  , $(command'  'ghcidExec)    ["async", "!"]
                   ]
                 }
             ]

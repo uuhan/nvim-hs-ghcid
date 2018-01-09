@@ -1,7 +1,7 @@
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 {- |
 Module      :  Neovim.Ghcid.Plugin
 Description :  Ghcid quickfix integration plugin
@@ -37,7 +37,6 @@ import           Data.List                    (group, sort)
 import           Data.Map                     (Map)
 import qualified Data.Map                     as Map
 import           Data.Maybe                   (mapMaybe)
-import           Data.Functor
 import           System.FilePath
 
 
@@ -54,17 +53,17 @@ data ProjectSettings = ProjectSettings
 
 
 instance ToJSON ProjectSettings
-
-
 instance FromJSON ProjectSettings
 
+type Mod = String
 
 data GhcidState r = GhcidState
     { startedSessions :: Map FilePath (Ghci, Neovim r (GhcidState r) ())
     -- ^ A map from the root directory (see 'rootDir') to a 'Ghci' session and a
     -- release function which unregisters some autocmds and stops the ghci
     -- session.
-
+    -- , omniHints       :: Map FilePath (Ghci, Map Mod [String])
+    -- ^ A map for caching omnifunc hints by browse command
     , quickfixItems   :: [QuickfixListItem String]
     }
 
@@ -87,32 +86,30 @@ ghcidStart copts = do
         Nothing -> void $
             yesOrNo "Could not determine project settings. This plugin needs a project with a .cabal file to work."
         Just s -> case bang copts of
-            Just True ->
-                startOrReload s
+                    Just True -> void $ startOrReload s
+                    _ -> do
+                      d <- askForDirectory
+                              "Specify directory from which ghcid should be started."
+                              (Just (rootDir s))
+                      c <- askForString
+                              "Specify the command to execute (e.g. \"ghci\")."
+                              (Just (cmd s))
 
-            _ -> do
-                d <- askForDirectory
-                        "Specify directory from which ghcid should be started."
-                        (Just (rootDir s))
-                c <- askForString
-                        "Specify the command to execute (e.g. \"ghci\")."
-                        (Just (cmd s))
-
-                let s' = ProjectSettings d c
-                whenM (yesOrNo "Save settings to file?") .
-                    liftIO . BS.writeFile (d </> "ghcid.yaml") $ encode s'
-                startOrReload s
+                      let s' = ProjectSettings d c
+                      whenM (yesOrNo "Save settings to file?") .
+                          liftIO . BS.writeFile (d </> "ghcid.yaml") $ encode s'
+                      void $ startOrReload s
 
 
 -- | Start a new ghcid session or reload the modules to update the quickfix
 -- list.
-startOrReload :: ProjectSettings -> Neovim r (GhcidState r) ()
+startOrReload :: ProjectSettings -> Neovim r (GhcidState r) Ghci
 startOrReload s@(ProjectSettings d c) = Map.lookup d <$> gets startedSessions >>= \case
     Nothing -> do
         (g, ls) <- liftIO $ startGhci c (Just d) (\_ _ -> return ())
         applyQuickfixActions $ loadToQuickfix ls
         void $ vim_command "cwindow"
-        ra <- addAutocmd "BufWritePost" def (startOrReload s) >>= \case
+        ra <- addAutocmd "BufWritePost" def (void $ startOrReload s) >>= \case
             Nothing ->
                 return $ return ()
 
@@ -123,27 +120,42 @@ startOrReload s@(ProjectSettings d c) = Map.lookup d <$> gets startedSessions >>
                 return $ Resource.release rk
 
         modifyStartedSessions $ Map.insert d (g,ra >> liftIO (stopGhci g))
+        return g
 
     Just (ghci, _) -> do
         items <- loadToQuickfix <$> liftIO (reload ghci)
         applyQuickfixActions items
         void $ vim_command $ "cwindow " ++ show (length items)
+        return ghci
 
 -- | Run command from nvim side
-ghcidExec :: Object -> Neovim r (GhcidState r) [String]
-ghcidExec (ObjectString command) = do
+ghcidExec :: CommandArguments -> Neovim r (GhcidState r) ()
+ghcidExec copts = do
     currentBufferPath <- errOnInvalidResult $ vim_call_function "expand" [ObjectBinary "%:p:h"]
     liftIO (determineProjectSettings' currentBufferPath) >>= \case
-        Nothing ->
-          [] <$ yesOrNo "Could not determine project settings. This plugin needs a project with a .cabal file to work."
+        Nothing -> void $
+          yesOrNo "Could not determine project settings. This plugin needs a project with a .cabal file to work."
         Just s@ProjectSettings{..} ->
           Map.lookup rootDir <$> gets startedSessions >>= \case
-            Nothing -> do
-              whenM (yesOrNo "You need to start run GhcidStart for this projet!")
-                (startOrReload s)
-              return []
-            Just (ghcid, _) ->
-              liftIO $ exec ghcid $ BS8.unpack command
+            Nothing -> case bang copts of
+                         Just True -> startOrReload s >>= react
+                         _ -> whenM (yesOrNo "You need to start run GhcidStart for this projet!")
+                                (startOrReload s >>= react)
+            Just (ghcid, _) -> react ghcid
+    where
+      react ghcid = input "λ> " Nothing Nothing >>= \case
+          Left err -> return ()
+          Right (ObjectString s) -> do
+            let command = BS8.unpack s
+            res <- liftIO $ exec ghcid command
+            Neovim.nvim_command' "new"
+            buf <- Neovim.nvim_get_current_buf'
+            win <- Neovim.nvim_get_current_win'
+            Neovim.nvim_win_set_height' win 8
+            Neovim.buffer_set_option' buf "buftype" $ ObjectString "nofile"
+            Neovim.nvim_command' "autocmd WinLeave <buffer> :bd"
+            Neovim.buffer_set_lines' buf 0 0 False res
+          Right _ -> return ()
 
 applyQuickfixActions :: [QuickfixListItem String] -> Neovim r (GhcidState r) ()
 applyQuickfixActions qs = do
