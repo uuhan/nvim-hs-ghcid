@@ -31,7 +31,7 @@ import           Control.Monad.Trans.Maybe
 import qualified Control.Monad.Trans.Resource as Resource
 import qualified Data.ByteString              as BS
 import           Data.Either                  (rights)
-import           Data.List                    (groupBy, sort)
+import           Data.List                    (group, sort)
 import           Data.Map                     (Map)
 import qualified Data.Map                     as Map
 import           Data.Maybe                   (mapMaybe)
@@ -122,8 +122,9 @@ startOrReload s@(ProjectSettings d c) = Map.lookup d <$> gets startedSessions >>
         modifyStartedSessions $ Map.insert d (g,ra >> liftIO (stopGhci g))
 
     Just (ghci, _) -> do
-        applyQuickfixActions =<< loadToQuickfix <$> liftIO (reload ghci)
-        void $ vim_command "cwindow"
+        items <- loadToQuickfix <$> liftIO (reload ghci)
+        applyQuickfixActions items
+        void $ vim_command $ "cwindow " ++ show (length items)
 
 
 applyQuickfixActions :: [QuickfixListItem String] -> Neovim r (GhcidState r) ()
@@ -134,7 +135,7 @@ applyQuickfixActions qs = do
     setqflist qs Replace
     placeSigns qs
   where
-    nub' = map head . groupBy (==) . sort
+    nub' = map head . group . sort
 
 
 placeSigns :: [QuickfixListItem String] -> Neovim r st ()
@@ -185,7 +186,7 @@ loadToQuickfix = dropWarningsIfErrorsArePresent . mapMaybe f
         Just $ (quickfixListItem
                     ((Right . loadFile) m)
                     ((Left . fst . loadFilePos) m))
-                    { col = Just $ ((snd . loadFilePos) m, True)
+                    { col = Just ((snd . loadFilePos) m, True)
                     , Q.text = (unlines . loadMessage) m
                     , errorType = case loadSeverity m of
                         Ghcid.Warning -> Q.Warning
