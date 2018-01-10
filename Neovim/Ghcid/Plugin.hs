@@ -143,19 +143,21 @@ ghcidExec copts = do
                                 (startOrReload s >>= react)
             Just (ghcid, _) -> react ghcid
     where
-      react ghcid = input "λ> " Nothing Nothing >>= \case
+      react ghcid = input "λ>" Nothing Nothing >>= \case
           Left err -> return ()
           Right (ObjectString s) -> do
             let command = BS8.unpack s
             res <- liftIO $ exec ghcid command
-            let height = if length res > 10 then 10 else length res
+            let its = length res
+            let height = max its 10
 
-            Neovim.nvim_command' $ "below " ++ show height ++ " split"
-            Neovim.nvim_command' "enew"
-            buf <- Neovim.nvim_get_current_buf'
-            Neovim.buffer_set_option' buf "buftype" $ ObjectString "nofile"
-            Neovim.nvim_command' "autocmd WinLeave <buffer> :bd"
-            Neovim.buffer_set_lines' buf 0 1 False res
+            unless (its == 0) $ do
+              Neovim.nvim_command' $ "below " ++ show height ++ " split"
+              Neovim.nvim_command' "enew"
+              buf <- Neovim.nvim_get_current_buf'
+              Neovim.buffer_set_option' buf "buftype" $ ObjectString "nofile"
+              Neovim.nvim_command' "autocmd WinLeave <buffer> :bd"
+              Neovim.buffer_set_lines' buf 0 1 False res
 
           Right _ -> return ()
 
