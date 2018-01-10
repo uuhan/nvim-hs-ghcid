@@ -149,8 +149,7 @@ ghcidExec copts = do
             let command = BS8.unpack s
             res <- liftIO $ exec ghcid command
             let its = length res
-            let height = max its 10
-
+            let height = min its 10
             unless (its == 0) $ do
               Neovim.nvim_command' $ "below " ++ show height ++ " split"
               Neovim.nvim_command' "enew"
@@ -160,6 +159,25 @@ ghcidExec copts = do
               Neovim.buffer_set_lines' buf 0 1 False res
 
           Right _ -> return ()
+
+ghcidRun :: String -> Neovim r (GhcidState r) String
+ghcidRun command = do
+    currentBufferPath <- errOnInvalidResult $ vim_call_function "expand" [ObjectBinary "%:p:h"]
+    liftIO (determineProjectSettings' currentBufferPath) >>= \case
+        Nothing -> "" <$
+          yesOrNo "Could not determine project settings. This plugin needs a project with a .cabal file to work."
+        Just s@ProjectSettings{..} ->
+          Map.lookup rootDir <$> gets startedSessions >>= \case
+            Nothing -> do
+              yes <- yesOrNo "You need to start run GhcidStart for this projet!"
+              if yes then startOrReload s >>= react
+                     else return ""
+            Just (ghcid, _) -> react ghcid
+    where
+      react ghcid = do
+        res <- liftIO $ exec ghcid command
+        -- remove tailing '\n'
+        return $ reverse . dropWhile (== '\n') . reverse . unlines $ res
 
 applyQuickfixActions :: [QuickfixListItem String] -> Neovim r (GhcidState r) ()
 applyQuickfixActions qs = do
