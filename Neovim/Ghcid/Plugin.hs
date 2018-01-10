@@ -148,13 +148,14 @@ ghcidExec copts = do
           Right (ObjectString s) -> do
             let command = BS8.unpack s
             res <- liftIO $ exec ghcid command
-            Neovim.nvim_command' "new"
+
+            Neovim.nvim_command' "below 10 split"
+            Neovim.nvim_command' "enew"
             buf <- Neovim.nvim_get_current_buf'
-            win <- Neovim.nvim_get_current_win'
-            Neovim.nvim_win_set_height' win 8
             Neovim.buffer_set_option' buf "buftype" $ ObjectString "nofile"
             Neovim.nvim_command' "autocmd WinLeave <buffer> :bd"
             Neovim.buffer_set_lines' buf 0 0 False res
+
           Right _ -> return ()
 
 applyQuickfixActions :: [QuickfixListItem String] -> Neovim r (GhcidState r) ()
